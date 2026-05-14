@@ -6,7 +6,7 @@ import os
 import pyttsx3
 import threading
 
-VIDEO_FILE = r'C:\Users\User\Desktop\media\0209v\2.手指伸展0209.mp4' 
+VIDEO_FILE = r'0209v/0514v2.mp4' 
 TARGET_REPS_PER_SIDE = 5
 
 speech_engine = None
