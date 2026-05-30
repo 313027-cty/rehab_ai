@@ -1,3 +1,5 @@
+screeninfo
 streamlit
 streamlit-webrtc
 opencv-python-headless
+mediapipe
