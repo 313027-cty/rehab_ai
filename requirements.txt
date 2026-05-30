@@ -1,5 +1,8 @@
+import json
+import time
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 
 import av
 import cv2
@@ -8,15 +11,20 @@ import mediapipe.python.solutions.hands as mp_hands
 import mediapipe.python.solutions.pose as mp_pose
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 from streamlit_webrtc import VideoProcessorBase, WebRtcMode, webrtc_streamer
+
+
+mp_pose_connections = mp_pose.POSE_CONNECTIONS
+mp_hand_connections = mp_hands.HAND_CONNECTIONS
 
 
 @dataclass(frozen=True)
 class ExerciseConfig:
-    title: str
-    subtitle: str
+    action_name: str
     kind: str
-    target_reps: int
+    demo_video: str
+    target_reps: int = 5
     two_sides: bool = False
 
 
@@ -65,17 +73,16 @@ class RehabProcessor(VideoProcessorBase):
         self.counters = {"LEFT": 0, "RIGHT": 0}
         self.status = "按 START 後開始辨識。"
         self.last_value = "-"
+        self.speech_text = "歡迎使用 AI 教練。請先觀看示範影片，再按 START 開始。"
 
     def recv(self, frame):
         image = frame.to_ndarray(format="bgr24")
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         if self.config.kind == "hand_open":
-            color, status = self._process_hand_open(image, rgb)
+            status = self._process_hand_open(image, rgb)
         else:
-            color, status = self._process_pose(image, rgb)
-
-        self._draw_overlay(image, color, status)
+            status = self._process_pose(image, rgb)
 
         with self.lock:
             self.status = status
@@ -84,61 +91,72 @@ class RehabProcessor(VideoProcessorBase):
 
     def _process_hand_open(self, image, rgb):
         results = self.hands.process(rgb)
-        color = (0, 0, 255)
-        status = "未偵測到手掌，請讓手掌進入畫面。"
 
+        if self._two_side_complete():
+            if results.multi_hand_landmarks:
+                for landmarks in results.multi_hand_landmarks:
+                    mp_drawing.draw_landmarks(image, landmarks, mp_hand_connections)
+            return "訓練完成，已停止計次。"
+
+        status = "未偵測到手掌，請讓手掌進入畫面。"
         if not results.multi_hand_landmarks:
-            return color, status
+            return status
 
         for i, landmarks in enumerate(results.multi_hand_landmarks):
-            label = results.multi_handedness[i].classification[0].label.upper()
+            raw_label = results.multi_handedness[i].classification[0].label.upper()
+            label = "LEFT" if raw_label == "RIGHT" else "RIGHT"
+            mp_drawing.draw_landmarks(image, landmarks, mp_hand_connections)
+
             if label != self.current_target:
-                mp_drawing.draw_landmarks(image, landmarks, mp_hands.HAND_CONNECTIONS)
                 continue
 
             extension = hand_extension(landmarks)
             self.last_value = f"{extension:.2f}"
-            color = (0, 255, 0)
-            status = f"{self._side_text()}手掌開合值：{extension:.2f}"
+            status = f"{self._side_text()}手開合值：{extension:.2f}"
 
             if extension < 0.25:
                 self.stage = "close"
-                status = f"{self._side_text()}握拳後再張開。"
+                status = f"{self._side_text()}手握拳後再張開。"
 
-            if extension > 0.35 and self.stage == "close":
+            if (
+                extension > 0.35
+                and self.stage == "close"
+                and self.counters[self.current_target] < self.config.target_reps
+            ):
                 self.stage = "open"
                 self.counters[self.current_target] += 1
-                status = f"{self._side_text()}完成第 {self.counters[self.current_target]} 次。"
+                count = self.counters[self.current_target]
+                status = f"{self._side_text()}手完成第 {count} 次。"
+                self._say(str(count))
                 self._advance_side_if_needed()
 
-            mp_drawing.draw_landmarks(image, landmarks, mp_hands.HAND_CONNECTIONS)
-
-        return color, status
+        return status
 
     def _process_pose(self, image, rgb):
         results = self.pose.process(rgb)
-        color = (0, 0, 255)
-        status = "未偵測到姿勢，請讓上半身進入畫面。"
 
         if not results.pose_landmarks:
-            return color, status
+            return "未偵測到姿勢，請讓上半身進入畫面。"
 
         lm = results.pose_landmarks.landmark
         kind = self.config.kind
 
         if kind == "elbow":
-            color, status = self._process_elbow(lm)
+            status = self._process_elbow(lm)
         elif kind == "shoulder_circles":
-            color, status = self._process_shoulder_circles(lm)
+            status = self._process_shoulder_circles(lm)
         elif kind == "hand_raise":
-            color, status = self._process_hand_raise(lm)
-        elif kind == "lateral_raise":
-            color, status = self._process_lateral_raise(lm)
+            status = self._process_hand_raise(lm)
+        else:
+            status = self._process_lateral_raise(lm)
 
-        mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-        return color, status
+        mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose_connections)
+        return status
 
     def _process_elbow(self, lm):
+        if self._two_side_complete():
+            return "訓練完成，已停止計次。"
+
         if self.current_target == "LEFT":
             shoulder = mp_pose.PoseLandmark.LEFT_SHOULDER
             elbow = mp_pose.PoseLandmark.LEFT_ELBOW
@@ -149,7 +167,7 @@ class RehabProcessor(VideoProcessorBase):
             wrist = mp_pose.PoseLandmark.RIGHT_WRIST
 
         if lm[elbow].visibility <= 0.7:
-            return (0, 0, 255), "手肘不清楚，請調整鏡頭或光線。"
+            return "手肘不清楚，請調整鏡頭或光線。"
 
         angle = calculate_angle(
             [lm[shoulder].x, lm[shoulder].y],
@@ -161,17 +179,26 @@ class RehabProcessor(VideoProcessorBase):
 
         if angle > 160:
             self.stage = "stretch"
-            status = f"{self._side_text()}伸直，再慢慢彎曲。"
+            status = f"{self._side_text()}手伸直，再慢慢彎曲。"
 
-        if angle < 45 and self.stage == "stretch":
+        if (
+            angle < 45
+            and self.stage == "stretch"
+            and self.counters[self.current_target] < self.config.target_reps
+        ):
             self.stage = "flex"
             self.counters[self.current_target] += 1
-            status = f"{self._side_text()}完成第 {self.counters[self.current_target]} 次。"
+            count = self.counters[self.current_target]
+            status = f"{self._side_text()}手完成第 {count} 次。"
+            self._say(str(count))
             self._advance_side_if_needed()
 
-        return (0, 255, 0), status
+        return status
 
     def _process_shoulder_circles(self, lm):
+        if self.reps >= self.config.target_reps:
+            return "訓練完成，已停止計次。"
+
         sh_l = lm[mp_pose.PoseLandmark.LEFT_SHOULDER]
         sh_r = lm[mp_pose.PoseLandmark.RIGHT_SHOULDER]
         hip_l = lm[mp_pose.PoseLandmark.LEFT_HIP]
@@ -181,16 +208,24 @@ class RehabProcessor(VideoProcessorBase):
 
         if rel_height > 0.41:
             self.stage = "up"
-            return (0, 255, 0), "偵測到上提，請放回。"
+            return "偵測到上提，請放回。"
 
         if rel_height < 0.39 and self.stage == "up":
             self.stage = "down"
             self.reps += 1
-            return (0, 255, 0), f"完成第 {self.reps} 次。"
+            self._say(
+                f"{self.reps}，訓練完成，做得太棒了。"
+                if self.reps >= self.config.target_reps
+                else str(self.reps)
+            )
+            return f"完成第 {self.reps} 次。"
 
-        return (0, 0, 255), f"肩部高度值：{rel_height:.2f}"
+        return f"肩部高度值：{rel_height:.2f}"
 
     def _process_hand_raise(self, lm):
+        if self.reps >= self.config.target_reps:
+            return "訓練完成，已停止計次。"
+
         l_wrist = lm[mp_pose.PoseLandmark.LEFT_WRIST]
         r_wrist = lm[mp_pose.PoseLandmark.RIGHT_WRIST]
         l_shoulder = lm[mp_pose.PoseLandmark.LEFT_SHOULDER]
@@ -204,19 +239,27 @@ class RehabProcessor(VideoProcessorBase):
         if is_raised:
             self.stage = "up"
             self.last_value = "up"
-            return (0, 255, 0), "手已舉起，請放下完成一次。"
+            return "手已舉起，請放下完成一次。"
 
         both_down = l_wrist.y > l_shoulder.y and r_wrist.y > r_shoulder.y
         if both_down and self.stage == "up":
             self.stage = "down"
             self.reps += 1
             self.last_value = "down"
-            return (0, 255, 0), f"完成第 {self.reps} 次。"
+            self._say(
+                f"{self.reps}，訓練完成，做得太棒了。"
+                if self.reps >= self.config.target_reps
+                else str(self.reps)
+            )
+            return f"完成第 {self.reps} 次。"
 
         self.last_value = "down"
-        return (0, 0, 255), "請向上舉手。"
+        return "請向上舉手。"
 
     def _process_lateral_raise(self, lm):
+        if self.reps >= self.config.target_reps:
+            return "訓練完成，已停止計次。"
+
         l_elbow = lm[mp_pose.PoseLandmark.LEFT_ELBOW]
         r_elbow = lm[mp_pose.PoseLandmark.RIGHT_ELBOW]
         l_shoulder = lm[mp_pose.PoseLandmark.LEFT_SHOULDER]
@@ -226,7 +269,7 @@ class RehabProcessor(VideoProcessorBase):
             point.visibility > 0.7 for point in [l_elbow, r_elbow, l_shoulder, r_shoulder]
         )
         if not points_visible:
-            return (0, 0, 255), "肩膀或手肘不清楚，請調整鏡頭。"
+            return "肩膀或手肘不清楚，請調整鏡頭。"
 
         elbows_up = l_elbow.y < l_shoulder.y + 0.12 and r_elbow.y < r_shoulder.y + 0.12
         elbows_down = l_elbow.y > l_shoulder.y + 0.25 and r_elbow.y > r_shoulder.y + 0.25
@@ -234,16 +277,21 @@ class RehabProcessor(VideoProcessorBase):
         if elbows_up:
             self.stage = "up"
             self.last_value = "up"
-            return (0, 255, 0), "雙手已側舉，請放下完成一次。"
+            return "雙手已側舉，請放下完成一次。"
 
         if elbows_down and self.stage == "up":
             self.stage = "down"
             self.reps += 1
             self.last_value = "down"
-            return (0, 255, 0), f"完成第 {self.reps} 次。"
+            self._say(
+                f"{self.reps}，訓練完成，做得太棒了。"
+                if self.reps >= self.config.target_reps
+                else str(self.reps)
+            )
+            return f"完成第 {self.reps} 次。"
 
         self.last_value = "down"
-        return (0, 0, 255), "請雙手同時側舉。"
+        return "請雙手同時側舉。"
 
     def _advance_side_if_needed(self):
         if (
@@ -253,63 +301,89 @@ class RehabProcessor(VideoProcessorBase):
         ):
             self.current_target = "LEFT"
             self.stage = "wait"
+            self._say("右手完成，請換左手。")
+        elif self._two_side_complete():
+            self._say(f"{self.config.target_reps}，訓練完成，做得太棒了。")
+
+    def _two_side_complete(self):
+        return (
+            self.config.two_sides
+            and self.counters["RIGHT"] >= self.config.target_reps
+            and self.counters["LEFT"] >= self.config.target_reps
+        )
 
     def _side_text(self):
         return "左" if self.current_target == "LEFT" else "右"
 
-    def _draw_overlay(self, image, color, status):
-        h, w = image.shape[:2]
-        cv2.rectangle(image, (0, 0), (w, 118), (28, 28, 28), -1)
+    def _say(self, text):
+        self.speech_text = text
 
-        if self.config.two_sides:
-            cv2.putText(
-                image,
-                f"RIGHT: {self.counters['RIGHT']} / {self.config.target_reps}",
-                (24, 45),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1.0,
-                (0, 255, 255),
-                2,
-                cv2.LINE_AA,
-            )
-            cv2.putText(
-                image,
-                f"LEFT: {self.counters['LEFT']} / {self.config.target_reps}",
-                (24, 88),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1.0,
-                (0, 255, 255),
-                2,
-                cv2.LINE_AA,
-            )
+
+def browser_speak(text):
+    components.html(
+        f"""
+        <script>
+        const text = {json.dumps(text)};
+        const synth = window.parent.speechSynthesis || window.speechSynthesis;
+        if (synth && text) {{
+          synth.cancel();
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = "zh-TW";
+          utterance.rate = 1.05;
+          synth.speak(utterance);
+        }}
+        </script>
+        """,
+        height=0,
+    )
+
+
+def read_processor_state(ctx, config):
+    if not ctx.video_processor:
+        return {
+            "status": "按 START 後開始辨識。",
+            "last_value": "-",
+            "reps": 0,
+            "counters": {"LEFT": 0, "RIGHT": 0},
+            "current_target": "RIGHT",
+            "speech_text": None,
+        }
+
+    with ctx.video_processor.lock:
+        return {
+            "status": ctx.video_processor.status,
+            "last_value": ctx.video_processor.last_value,
+            "reps": ctx.video_processor.reps,
+            "counters": dict(ctx.video_processor.counters),
+            "current_target": ctx.video_processor.current_target,
+            "speech_text": ctx.video_processor.speech_text,
+        }
+
+
+def render_state(state, config, metrics_slot, status_slot):
+    with metrics_slot.container():
+        if config.two_sides:
+            col1, col2, col3 = st.columns(3)
+            col1.metric("右側", f"{state['counters']['RIGHT']} / {config.target_reps}")
+            col2.metric("左側", f"{state['counters']['LEFT']} / {config.target_reps}")
+            col3.metric("目前", "左側" if state["current_target"] == "LEFT" else "右側")
         else:
-            cv2.putText(
-                image,
-                f"REPS: {self.reps} / {self.config.target_reps}",
-                (24, 70),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1.3,
-                (0, 255, 255),
-                3,
-                cv2.LINE_AA,
-            )
+            col1, col2 = st.columns(2)
+            col1.metric("計次", f"{state['reps']} / {config.target_reps}")
+            col2.metric("狀態", state["last_value"])
 
-        cv2.putText(
-            image,
-            status,
-            (24, h - 28),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            color,
-            2,
-            cv2.LINE_AA,
-        )
+    status_slot.info(state["status"])
 
 
 def run_app(config: ExerciseConfig):
-    st.set_page_config(page_title=config.title, layout="centered")
-    st.title(config.title)
-    st.caption(config.subtitle)
+    st.set_page_config(page_title=config.action_name, layout="centered")
+    st.title(config.action_name)
+
+    video_path = Path(__file__).parent / config.demo_video
+    if video_path.exists():
+        st.video(video_path.read_bytes(), format="video/mp4")
+    else:
+        st.warning("找不到示範影片，請確認 media 資料夾已上傳。")
 
     ctx = webrtc_streamer(
         key=config.kind,
@@ -319,29 +393,24 @@ def run_app(config: ExerciseConfig):
         async_processing=True,
     )
 
-    if ctx.video_processor:
-        with ctx.video_processor.lock:
-            status = ctx.video_processor.status
-            last_value = ctx.video_processor.last_value
-            reps = ctx.video_processor.reps
-            counters = dict(ctx.video_processor.counters)
-            current_target = ctx.video_processor.current_target
-    else:
-        status = "按 START 後開始辨識。"
-        last_value = "-"
-        reps = 0
-        counters = {"LEFT": 0, "RIGHT": 0}
-        current_target = "RIGHT"
+    metrics_slot = st.empty()
+    status_slot = st.empty()
+    speech_slot = st.empty()
 
-    if config.two_sides:
-        col1, col2, col3 = st.columns(3)
-        col1.metric("右側", f"{counters['RIGHT']} / {config.target_reps}")
-        col2.metric("左側", f"{counters['LEFT']} / {config.target_reps}")
-        col3.metric("目前", "左側" if current_target == "LEFT" else "右側")
-    else:
-        col1, col2 = st.columns(2)
-        col1.metric("次數", f"{reps} / {config.target_reps}")
-        col2.metric("狀態值", last_value)
+    state = read_processor_state(ctx, config)
+    render_state(state, config, metrics_slot, status_slot)
 
-    st.info(status)
-    st.markdown("請允許瀏覽器使用攝影機。部署到 Streamlit Cloud 後會使用使用者自己的鏡頭。")
+    if "last_spoken" not in st.session_state:
+        st.session_state.last_spoken = None
+
+    while ctx.state.playing:
+        state = read_processor_state(ctx, config)
+        render_state(state, config, metrics_slot, status_slot)
+
+        speech_text = state["speech_text"]
+        if speech_text and speech_text != st.session_state.last_spoken:
+            st.session_state.last_spoken = speech_text
+            with speech_slot:
+                browser_speak(speech_text)
+
+        time.sleep(0.4)
