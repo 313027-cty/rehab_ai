@@ -1,36 +1,81 @@
+import os
+import warnings
+
+# 降低 MediaPipe / TFLite / absl 的雜訊輸出（避免控制台被 WARNING 佔滿）
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("GLOG_minloglevel", "3")
+os.environ.setdefault("ABSL_LOGGING_MIN_LEVEL", "3")
+
+try:
+    from absl import logging as absl_logging
+
+    absl_logging.set_verbosity(absl_logging.ERROR)
+    absl_logging.set_stderrthreshold("error")
+except Exception:
+    pass
+
+warnings.filterwarnings(
+    "ignore",
+    message=r".*SymbolDatabase\\.GetPrototype\\(\\) is deprecated.*",
+    category=UserWarning,
+)
+
 import cv2
 import mediapipe as mp
 import numpy as np
 import screeninfo
-import os
 import pyttsx3
 import threading
+import sys
 
-VIDEO_FILE = r'C:\Users\User\Desktop\media\0209v\5.雙手側舉0209.mp4' 
+# 取得目前程式執行的地方
+if getattr(sys, "frozen", False):
+    base_path = os.path.dirname(sys.executable)
+else:
+    base_path = os.path.dirname(os.path.abspath(__file__))
+
+VIDEO_FILE = os.path.join(base_path, "media", "0514v5.mp4")
 TARGET_REPS = 10 
 
-speech_engine = None
+# --- 語音系統 (支援即時中斷) ---
+speech_lock = threading.Lock()
+current_engine = None
+
 
 def speak(text):
-    global speech_engine
     def _say():
-        global speech_engine
-        try:
-            speech_engine = pyttsx3.init()
-            speech_engine.setProperty('rate', 150)
-            speech_engine.say(text)
-            speech_engine.runAndWait()
-        except:
-            pass
+        global current_engine
+        with speech_lock:
+            try:
+                engine = pyttsx3.init()
+                current_engine = engine
+                engine.setProperty("rate", 200)
+                engine.setProperty("volume", 1.0)
+
+                voices = engine.getProperty("voices")
+                for v in voices:
+                    if "Chinese" in v.name or "CHT" in v.name or "Han" in v.name:
+                        engine.setProperty("voice", v.id)
+                        break
+
+                engine.say(text)
+                engine.runAndWait()
+            except:
+                pass
+            finally:
+                current_engine = None
+
     threading.Thread(target=_say, daemon=True).start()
 
+
 def stop_speech():
-    global speech_engine
-    try:
-        if speech_engine:
-            speech_engine.stop()
-    except:
-        pass
+    """強制停止目前語音"""
+    global current_engine
+    if current_engine:
+        try:
+            current_engine.stop()
+        except:
+            pass
 
 should_exit = False
 skip_demo = False
@@ -103,23 +148,50 @@ def run_trainer():
     except:
         sw, sh = 1280, 720
 
-    if not os.path.exists(VIDEO_FILE): return
+    has_demo_video = os.path.exists(VIDEO_FILE)
 
     win_name = 'AI Trainer'
     cv2.namedWindow(win_name, cv2.WND_PROP_FULLSCREEN)
     cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
-    demo_cap = cv2.VideoCapture(VIDEO_FILE)
-    fps = demo_cap.get(cv2.CAP_PROP_FPS) or 30
-    all_frames = []
-    while True:
-        ret, frame = demo_cap.read()
-        if not ret: break
-        all_frames.append(frame)
-    demo_cap.release()
+    if has_demo_video:
+        demo_cap = cv2.VideoCapture(VIDEO_FILE)
+        fps = demo_cap.get(cv2.CAP_PROP_FPS) or 30
+        all_frames = []
+        while True:
+            ret, frame = demo_cap.read()
+            if not ret:
+                break
+            all_frames.append(frame)
+        demo_cap.release()
+    else:
+        skip_demo = True
+        fps = 30
+        placeholder = np.zeros((360, 640, 3), dtype=np.uint8)
+        cv2.putText(
+            placeholder,
+            "DEMO VIDEO NOT FOUND",
+            (30, 170),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.0,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            placeholder,
+            "Using live camera only",
+            (55, 220),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        all_frames = [placeholder]
     
     cv2.setMouseCallback(win_name, click_event, param=("DEMO", sw, sh, len(all_frames)))
-    speak("你好，請觀察雙手側舉動作，完成後點擊右下角跳過。")
+    speak("歡迎使用 AI 教練。請先觀察示範動作，也可以點擊右下角跳過。")
 
     while not skip_demo and not should_exit:
         raw_frame = all_frames[current_frame_idx].copy()
@@ -156,12 +228,13 @@ def run_trainer():
 
     if not should_exit:
         cv2.setMouseCallback(win_name, click_event, param=("LIVE", sw, sh, 0))
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
         reps = 0
         stage = "down"
         demo_idx = 0
 
         speak(f"現在開始訓練，請雙手同時側舉，目標{TARGET_REPS}次。")
+        intro_interrupted = False
 
         while cap.isOpened() and not should_exit:
             success, frame = cap.read()
@@ -173,6 +246,9 @@ def run_trainer():
             color = (0, 0, 255)
 
             if results.pose_landmarks:
+                if not intro_interrupted:
+                    stop_speech()
+                    intro_interrupted = True
                 lm = results.pose_landmarks.landmark
                 l_elbow, r_elbow = lm[mp_pose.PoseLandmark.LEFT_ELBOW], lm[mp_pose.PoseLandmark.RIGHT_ELBOW]
                 l_shoulder, r_shoulder = lm[mp_pose.PoseLandmark.LEFT_SHOULDER], lm[mp_pose.PoseLandmark.RIGHT_SHOULDER]
@@ -207,7 +283,7 @@ def run_trainer():
                 stop_speech()
                 break
             if reps >= TARGET_REPS:
-                speak("太棒了，側舉動作完美完成！")
+                speak("太棒了")
                 cv2.waitKey(2000)
                 break
 
