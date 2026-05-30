@@ -1,13 +1,11 @@
-# 0209v3 Streamlit Deployment
+from rehab_core import ExerciseConfig, run_app
 
-Main file:
 
-```text
-app.py
-```
-
-Local run:
-
-```bash
-streamlit run app.py
-```
+run_app(
+    ExerciseConfig(
+        action_name="肩部循環",
+        kind="shoulder_circles",
+        demo_video="media/0514v3.mp4",
+        target_reps=5,
+    )
+)
