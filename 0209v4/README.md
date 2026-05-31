@@ -1,11 +1,13 @@
-from rehab_core import ExerciseConfig, run_app
+# 0209v4 Streamlit Deployment
 
+Main file:
 
-run_app(
-    ExerciseConfig(
-        action_name="舉手",
-        kind="hand_raise",
-        demo_video="media/0514v4.mp4",
-        target_reps=5,
-    )
-)
+```text
+app.py
+```
+
+Local run:
+
+```bash
+streamlit run app.py
+```
