@@ -87,8 +87,7 @@ class RehabProcessor(VideoProcessorBase):
         with self.lock:
             self.status = status
 
-        display_image = cv2.flip(image, 1)
-        return av.VideoFrame.from_ndarray(display_image, format="bgr24")
+        return av.VideoFrame.from_ndarray(image, format="bgr24")
 
     def _process_hand_open(self, image, rgb):
         results = self.hands.process(rgb)
