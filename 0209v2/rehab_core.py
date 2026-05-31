@@ -75,6 +75,7 @@ class RehabProcessor(VideoProcessorBase):
         self.status = "按 START 後開始辨識。"
         self.last_value = "-"
         self.speech_text = "準備開始復健訓練。"
+        self.speech_id = 1
         self.last_error_spoken_at = 0.0
 
     def recv(self, frame):
@@ -321,6 +322,7 @@ class RehabProcessor(VideoProcessorBase):
 
     def _say(self, text):
         self.speech_text = text
+        self.speech_id += 1
 
     def _say_error(self):
         now = time.monotonic()
@@ -338,6 +340,7 @@ def read_processor_state(ctx):
             "counters": {"LEFT": 0, "RIGHT": 0},
             "current_target": "RIGHT",
             "speech_text": None,
+            "speech_id": 0,
         }
 
     with ctx.video_processor.lock:
@@ -348,6 +351,7 @@ def read_processor_state(ctx):
             "counters": dict(ctx.video_processor.counters),
             "current_target": ctx.video_processor.current_target,
             "speech_text": ctx.video_processor.speech_text,
+            "speech_id": ctx.video_processor.speech_id,
         }
 
 
@@ -400,8 +404,9 @@ def install_speech_reader():
             const doc = window.parent.document;
             const node = doc.getElementById("rehab-speech-text");
             const text = node ? node.textContent.trim() : "";
-            if (!text || spoken.has(text)) return;
-            spoken.add(text);
+            const speechId = node ? node.getAttribute("data-speech-id") : "";
+            if (!text || !speechId || spoken.has(speechId)) return;
+            spoken.add(speechId);
             const synth = window.parent.speechSynthesis || window.speechSynthesis;
             if (!synth) return;
             synth.cancel();
@@ -455,8 +460,9 @@ def run_app(config: ExerciseConfig):
         state = read_processor_state(ctx)
         render_state(state, config, metrics_slot, status_slot)
         speech_text = state.get("speech_text") or ""
+        speech_id = state.get("speech_id", 0)
         speech_slot.markdown(
-            f'<span id="rehab-speech-text" style="display:none;">{html.escape(speech_text)}</span>',
+            f'<span id="rehab-speech-text" data-speech-id="{speech_id}" style="display:none;">{html.escape(speech_text)}</span>',
             unsafe_allow_html=True,
         )
         time.sleep(0.5)
