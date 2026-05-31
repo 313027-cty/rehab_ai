@@ -74,6 +74,7 @@ class RehabProcessor(VideoProcessorBase):
         self.counters = {"LEFT": 0, "RIGHT": 0}
         self.status = "按 START 後開始辨識。"
         self.last_value = "-"
+        self.speech_text = "準備開始復健訓練。"
 
     def recv(self, frame):
         image = frame.to_ndarray(format="bgr24")
@@ -127,6 +128,7 @@ class RehabProcessor(VideoProcessorBase):
             ):
                 self.stage = "open"
                 self.counters[self.current_target] += 1
+                self._say_count()
                 status = f"{self._side_text()}手完成第 {self.counters[self.current_target]} 次。"
                 self._advance_side_if_needed()
 
@@ -185,6 +187,7 @@ class RehabProcessor(VideoProcessorBase):
         ):
             self.stage = "flex"
             self.counters[self.current_target] += 1
+            self._say_count()
             status = f"{self._side_text()}手完成第 {self.counters[self.current_target]} 次。"
             self._advance_side_if_needed()
 
@@ -208,6 +211,7 @@ class RehabProcessor(VideoProcessorBase):
         if rel_height < 0.39 and self.stage == "up":
             self.stage = "down"
             self.reps += 1
+            self._say_single_count()
             return f"完成第 {self.reps} 次。"
 
         return f"肩部高度值：{rel_height:.2f}"
@@ -236,6 +240,7 @@ class RehabProcessor(VideoProcessorBase):
             self.stage = "down"
             self.reps += 1
             self.last_value = "down"
+            self._say_single_count()
             return f"完成第 {self.reps} 次。"
 
         self.last_value = "down"
@@ -268,6 +273,7 @@ class RehabProcessor(VideoProcessorBase):
             self.stage = "down"
             self.reps += 1
             self.last_value = "down"
+            self._say_single_count()
             return f"完成第 {self.reps} 次。"
 
         self.last_value = "down"
@@ -281,6 +287,9 @@ class RehabProcessor(VideoProcessorBase):
         ):
             self.current_target = "LEFT"
             self.stage = "wait"
+            self._say("好棒，右手完成，請換左手。")
+        elif self._two_side_complete():
+            self._say("太棒了，訓練完成。")
 
     def _two_side_complete(self):
         return (
@@ -292,6 +301,19 @@ class RehabProcessor(VideoProcessorBase):
     def _side_text(self):
         return "左" if self.current_target == "LEFT" else "右"
 
+    def _say_count(self):
+        count = self.counters[self.current_target]
+        self._say(f"{self._side_text()}手，第 {count} 次。")
+
+    def _say_single_count(self):
+        if self.reps >= self.config.target_reps:
+            self._say(f"第 {self.reps} 次，太棒了，訓練完成。")
+        else:
+            self._say(f"第 {self.reps} 次。")
+
+    def _say(self, text):
+        self.speech_text = text
+
 
 def read_processor_state(ctx):
     if not ctx.video_processor:
@@ -301,6 +323,7 @@ def read_processor_state(ctx):
             "reps": 0,
             "counters": {"LEFT": 0, "RIGHT": 0},
             "current_target": "RIGHT",
+            "speech_text": None,
         }
 
     with ctx.video_processor.lock:
@@ -310,6 +333,7 @@ def read_processor_state(ctx):
             "reps": ctx.video_processor.reps,
             "counters": dict(ctx.video_processor.counters),
             "current_target": ctx.video_processor.current_target,
+            "speech_text": ctx.video_processor.speech_text,
         }
 
 
@@ -332,9 +356,21 @@ def render_muted_video(video_path):
     encoded = base64.b64encode(video_path.read_bytes()).decode("ascii")
     components.html(
         f"""
-        <video controls muted playsinline style="width:100%; border-radius:8px;">
+        <video id="demo-video" controls muted defaultMuted playsinline style="width:100%; border-radius:8px;">
           <source src="data:video/mp4;base64,{encoded}" type="video/mp4">
         </video>
+        <script>
+        const video = document.getElementById("demo-video");
+        if (video) {{
+          video.muted = true;
+          video.defaultMuted = true;
+          video.volume = 0;
+          video.onvolumechange = () => {{
+            video.muted = true;
+            video.volume = 0;
+          }};
+        }}
+        </script>
         """,
         height=420,
     )
@@ -397,15 +433,16 @@ def run_app(config: ExerciseConfig):
     state = read_processor_state(ctx)
     render_state(state, config, metrics_slot, status_slot)
     speech_slot.markdown(
-        '<span id="rehab-speech-text" style="display:none;">按 START 後開始辨識。</span>',
+        '<span id="rehab-speech-text" style="display:none;">準備開始復健訓練。</span>',
         unsafe_allow_html=True,
     )
 
     while ctx.state.playing:
         state = read_processor_state(ctx)
         render_state(state, config, metrics_slot, status_slot)
+        speech_text = state.get("speech_text") or ""
         speech_slot.markdown(
-            f'<span id="rehab-speech-text" style="display:none;">{html.escape(state["status"])}</span>',
+            f'<span id="rehab-speech-text" style="display:none;">{html.escape(speech_text)}</span>',
             unsafe_allow_html=True,
         )
         time.sleep(0.5)
