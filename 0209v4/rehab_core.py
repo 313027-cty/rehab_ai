@@ -87,7 +87,9 @@ class RehabProcessor(VideoProcessorBase):
         with self.lock:
             self.status = status
 
-        return av.VideoFrame.from_ndarray(image, format="bgr24")
+        # streamlit-webrtc mirrors the displayed video element in some browsers.
+        # Return a pre-flipped frame so the final on-screen image is not mirrored.
+        return av.VideoFrame.from_ndarray(cv2.flip(image, 1), format="bgr24")
 
     def _process_hand_open(self, image, rgb):
         results = self.hands.process(rgb)
