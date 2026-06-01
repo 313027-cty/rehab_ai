@@ -1,44 +1,13 @@
 import base64
 import html
-import importlib.util
 import time
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 import av
-
-
-def patch_mediapipe_startup():
-    """Avoid MediaPipe Tasks import bug; this app only uses classic solutions."""
-    spec = importlib.util.find_spec("mediapipe")
-    if not spec or not spec.origin:
-        return
-
-    init_path = Path(spec.origin)
-    try:
-        text = init_path.read_text(encoding="utf-8")
-    except OSError:
-        return
-
-    patched = text
-    patched = patched.replace(
-        "import mediapipe.tasks.python as tasks",
-        "# Streamlit patch: tasks import disabled for solutions-only app",
-    )
-    patched = patched.replace("del framework", "globals().pop('framework', None)")
-    patched = patched.replace("del gpu", "globals().pop('gpu', None)")
-    patched = patched.replace("del modules", "globals().pop('modules', None)")
-    patched = patched.replace("del python", "globals().pop('python', None)")
-
-    if patched != text:
-        try:
-            init_path.write_text(patched, encoding="utf-8")
-        except OSError:
-            pass
-
-
-patch_mediapipe_startup()
+import cv2
+import mediapipe.python.solutions.drawing_utils as mp_drawing
 import mediapipe.python.solutions.hands as mp_hands
 import mediapipe.python.solutions.pose as mp_pose
 import numpy as np
@@ -87,50 +56,6 @@ def hand_extension(hand_landmarks):
     return float(sum(distances) / len(distances))
 
 
-def bgr_to_rgb(image):
-    return np.ascontiguousarray(image[:, :, ::-1])
-
-
-def flip_horizontal(image):
-    return np.ascontiguousarray(image[:, ::-1, :])
-
-
-def _draw_point(image, x, y, radius=4, color=(0, 0, 255)):
-    height, width = image.shape[:2]
-    x1 = max(0, x - radius)
-    x2 = min(width, x + radius + 1)
-    y1 = max(0, y - radius)
-    y2 = min(height, y + radius + 1)
-    image[y1:y2, x1:x2] = color
-
-
-def _draw_line(image, x1, y1, x2, y2, color=(255, 255, 255), thickness=2):
-    steps = max(abs(x2 - x1), abs(y2 - y1), 1)
-    xs = np.linspace(x1, x2, steps + 1).astype(int)
-    ys = np.linspace(y1, y2, steps + 1).astype(int)
-    for x, y in zip(xs, ys):
-        _draw_point(image, int(x), int(y), thickness, color)
-
-
-def draw_landmarks_np(image, landmarks, connections):
-    height, width = image.shape[:2]
-    points = []
-    for landmark in landmarks.landmark:
-        visible = getattr(landmark, "visibility", 1.0) >= 0.3
-        x = int(landmark.x * width)
-        y = int(landmark.y * height)
-        in_frame = 0 <= x < width and 0 <= y < height
-        points.append((x, y, visible and in_frame))
-
-    for start, end in connections:
-        if points[start][2] and points[end][2]:
-            _draw_line(image, points[start][0], points[start][1], points[end][0], points[end][1])
-
-    for x, y, visible in points:
-        if visible:
-            _draw_point(image, x, y)
-
-
 class RehabProcessor(VideoProcessorBase):
     def __init__(self, config: ExerciseConfig):
         self.config = config
@@ -156,7 +81,7 @@ class RehabProcessor(VideoProcessorBase):
 
     def recv(self, frame):
         image = frame.to_ndarray(format="bgr24")
-        rgb = bgr_to_rgb(image)
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         if self.config.kind == "hand_open":
             status = self._process_hand_open(image, rgb)
@@ -168,7 +93,7 @@ class RehabProcessor(VideoProcessorBase):
 
         # streamlit-webrtc mirrors the displayed video element in some browsers.
         # Return a pre-flipped frame so the final on-screen image is not mirrored.
-        return av.VideoFrame.from_ndarray(flip_horizontal(image), format="bgr24")
+        return av.VideoFrame.from_ndarray(cv2.flip(image, 1), format="bgr24")
 
     def _process_hand_open(self, image, rgb):
         results = self.hands.process(rgb)
@@ -176,7 +101,7 @@ class RehabProcessor(VideoProcessorBase):
         if self._two_side_complete():
             if results.multi_hand_landmarks:
                 for landmarks in results.multi_hand_landmarks:
-                    draw_landmarks_np(image, landmarks, HAND_CONNECTIONS)
+                    mp_drawing.draw_landmarks(image, landmarks, HAND_CONNECTIONS)
             return "訓練完成，已停止計次。"
 
         status = "未偵測到手掌，請讓手掌進入畫面。"
@@ -186,7 +111,7 @@ class RehabProcessor(VideoProcessorBase):
         for i, landmarks in enumerate(results.multi_hand_landmarks):
             raw_label = results.multi_handedness[i].classification[0].label.upper()
             label = "LEFT" if raw_label == "RIGHT" else "RIGHT"
-            draw_landmarks_np(image, landmarks, HAND_CONNECTIONS)
+            mp_drawing.draw_landmarks(image, landmarks, HAND_CONNECTIONS)
 
             if label != self.current_target:
                 continue
@@ -230,7 +155,7 @@ class RehabProcessor(VideoProcessorBase):
         else:
             status = self._process_lateral_raise(lm)
 
-        draw_landmarks_np(image, results.pose_landmarks, POSE_CONNECTIONS)
+        mp_drawing.draw_landmarks(image, results.pose_landmarks, POSE_CONNECTIONS)
         return status
 
     def _process_elbow(self, lm):
