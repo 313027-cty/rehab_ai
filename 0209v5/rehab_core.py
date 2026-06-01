@@ -1,11 +1,44 @@
 import base64
 import html
+import importlib.util
 import time
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 import av
+
+
+def patch_mediapipe_startup():
+    """Avoid MediaPipe Tasks import bug; this app only uses classic solutions."""
+    spec = importlib.util.find_spec("mediapipe")
+    if not spec or not spec.origin:
+        return
+
+    init_path = Path(spec.origin)
+    try:
+        text = init_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+
+    patched = text
+    patched = patched.replace(
+        "import mediapipe.tasks.python as tasks",
+        "# Streamlit patch: tasks import disabled for solutions-only app",
+    )
+    patched = patched.replace("del framework", "globals().pop('framework', None)")
+    patched = patched.replace("del gpu", "globals().pop('gpu', None)")
+    patched = patched.replace("del modules", "globals().pop('modules', None)")
+    patched = patched.replace("del python", "globals().pop('python', None)")
+
+    if patched != text:
+        try:
+            init_path.write_text(patched, encoding="utf-8")
+        except OSError:
+            pass
+
+
+patch_mediapipe_startup()
 import mediapipe.python.solutions.hands as mp_hands
 import mediapipe.python.solutions.pose as mp_pose
 import numpy as np
