@@ -303,13 +303,13 @@ class RehabProcessor(VideoProcessorBase):
 
     def _say_count(self):
         count = self.counters[self.current_target]
-        self._say(f"{self._side_text()}手，第 {count} 次。")
+        self._say(str(count))
 
     def _say_single_count(self):
         if self.reps >= self.config.target_reps:
-            self._say(f"第 {self.reps} 次，太棒了，訓練完成。")
+            self._say(f"{self.reps}，太棒了，訓練完成。")
         else:
-            self._say(f"第 {self.reps} 次。")
+            self._say(str(self.reps))
 
     def _say(self, text):
         self.speech_text = text
