@@ -75,6 +75,7 @@ class RehabProcessor(VideoProcessorBase):
         self.status = "按 START 後開始辨識。"
         self.last_value = "-"
         self.speech_text = "準備開始復健訓練。"
+        self.last_error_spoken_at = 0.0
 
     def recv(self, frame):
         image = frame.to_ndarray(format="bgr24")
@@ -120,6 +121,8 @@ class RehabProcessor(VideoProcessorBase):
             if extension < 0.25:
                 self.stage = "close"
                 status = f"{self._side_text()}手握拳後再張開。"
+            elif self.stage == "wait":
+                self._say_error()
 
             if (
                 extension > 0.35
@@ -166,6 +169,7 @@ class RehabProcessor(VideoProcessorBase):
             wrist = mp_pose.PoseLandmark.RIGHT_WRIST
 
         if lm[elbow].visibility <= 0.7:
+            self._say_error()
             return "手肘不清楚，請調整鏡頭或光線。"
 
         angle = calculate_angle(
@@ -179,6 +183,8 @@ class RehabProcessor(VideoProcessorBase):
         if angle > 160:
             self.stage = "stretch"
             status = f"{self._side_text()}手伸直，再慢慢彎曲。"
+        elif self.stage == "wait":
+            self._say_error()
 
         if (
             angle < 45
@@ -244,6 +250,7 @@ class RehabProcessor(VideoProcessorBase):
             return f"完成第 {self.reps} 次。"
 
         self.last_value = "down"
+        self._say_error()
         return "請向上舉手。"
 
     def _process_lateral_raise(self, lm):
@@ -277,6 +284,7 @@ class RehabProcessor(VideoProcessorBase):
             return f"完成第 {self.reps} 次。"
 
         self.last_value = "down"
+        self._say_error()
         return "請雙手同時側舉。"
 
     def _advance_side_if_needed(self):
@@ -313,6 +321,12 @@ class RehabProcessor(VideoProcessorBase):
 
     def _say(self, text):
         self.speech_text = text
+
+    def _say_error(self):
+        now = time.monotonic()
+        if now - self.last_error_spoken_at >= 3.0:
+            self.last_error_spoken_at = now
+            self._say("錯誤")
 
 
 def read_processor_state(ctx):
@@ -393,7 +407,7 @@ def install_speech_reader():
             synth.cancel();
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.lang = "zh-TW";
-            utterance.rate = 1.05;
+            utterance.rate = 1.35;
             synth.speak(utterance);
           } catch (e) {}
         }
