@@ -13,7 +13,12 @@ import mediapipe.python.solutions.pose as mp_pose
 import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
-from streamlit_webrtc import VideoProcessorBase, WebRtcMode, webrtc_streamer
+from streamlit_webrtc import (
+    VideoHTMLAttributes,
+    VideoProcessorBase,
+    WebRtcMode,
+    webrtc_streamer,
+)
 
 
 POSE_CONNECTIONS = mp_pose.POSE_CONNECTIONS
@@ -378,11 +383,69 @@ def render_state(state, config, metrics_slot, status_slot):
     status_slot.info(state["status"])
 
 
+def install_page_styles():
+    st.markdown(
+        """
+        <style>
+        section.main > div {
+            max-width: 1120px;
+            padding-top: 0.75rem;
+            padding-bottom: 1rem;
+        }
+        h1 {
+            margin-bottom: 0.35rem;
+        }
+        div[data-testid="stVerticalBlock"] {
+            gap: 0.45rem;
+        }
+        div[data-testid="stMetric"] {
+            margin-top: 0.15rem;
+        }
+        div[data-testid="stAlert"] {
+            margin-top: 0.2rem;
+        }
+        iframe {
+            max-width: 100% !important;
+        }
+        @media (max-width: 700px) {
+            section.main > div {
+                padding: 0.35rem 0.6rem 0.75rem;
+            }
+            h1 {
+                font-size: 1.65rem;
+                margin-bottom: 0.2rem;
+            }
+            div[data-testid="stVerticalBlock"] {
+                gap: 0.25rem;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_muted_video(video_path):
     encoded = base64.b64encode(video_path.read_bytes()).decode("ascii")
     components.html(
         f"""
-        <video id="demo-video" controls muted defaultMuted playsinline style="width:100%; border-radius:8px;">
+        <style>
+        html, body {{
+          margin: 0;
+          padding: 0;
+          background: transparent;
+          overflow: hidden;
+        }}
+        #demo-video {{
+          width: 100%;
+          height: 100%;
+          display: block;
+          object-fit: contain;
+          background: #000;
+          border-radius: 8px;
+        }}
+        </style>
+        <video id="demo-video" controls muted defaultMuted playsinline>
           <source src="data:video/mp4;base64,{encoded}" type="video/mp4">
         </video>
         <script>
@@ -398,7 +461,39 @@ def render_muted_video(video_path):
         }}
         </script>
         """,
-        height=420,
+        height=300,
+    )
+
+
+def install_camera_layout_fixes():
+    components.html(
+        """
+        <script>
+        function applyCameraLayoutFixes() {
+          try {
+            const doc = window.parent.document;
+            doc.querySelectorAll("iframe").forEach((frame) => {
+              const title = (frame.getAttribute("title") || "").toLowerCase();
+              const src = (frame.getAttribute("src") || "").toLowerCase();
+              if (title.includes("streamlit-webrtc") || src.includes("streamlit-webrtc")) {
+                frame.style.width = "100%";
+                frame.style.maxWidth = "100%";
+                frame.style.minHeight = window.innerWidth <= 700 ? "420px" : "560px";
+              }
+            });
+            doc.querySelectorAll("video").forEach((video) => {
+              video.style.width = "100%";
+              video.style.maxWidth = "100%";
+              video.style.height = "auto";
+              video.style.objectFit = "contain";
+            });
+          } catch (e) {}
+        }
+        applyCameraLayoutFixes();
+        setInterval(applyCameraLayoutFixes, 700);
+        </script>
+        """,
+        height=0,
     )
 
 
@@ -432,7 +527,8 @@ def install_speech_reader():
 
 
 def run_app(config: ExerciseConfig):
-    st.set_page_config(page_title=config.action_name, layout="centered")
+    st.set_page_config(page_title=config.action_name, layout="wide")
+    install_page_styles()
     st.title(config.action_name)
 
     video_path = Path(__file__).parent / config.demo_video
@@ -445,12 +541,25 @@ def run_app(config: ExerciseConfig):
         st.warning("找不到示範影片，請確認 media 資料夾已上傳。")
 
     install_speech_reader()
+    install_camera_layout_fixes()
 
     ctx = webrtc_streamer(
         key=config.kind,
         mode=WebRtcMode.SENDRECV,
         video_processor_factory=lambda: RehabProcessor(config),
         media_stream_constraints={"video": True, "audio": False},
+        video_html_attrs=VideoHTMLAttributes(
+            autoPlay=True,
+            controls=False,
+            muted=True,
+            style={
+                "width": "100%",
+                "maxWidth": "100%",
+                "height": "auto",
+                "objectFit": "contain",
+                "transform": "scaleX(1)",
+            },
+        ),
         async_processing=True,
     )
 
