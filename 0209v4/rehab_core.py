@@ -1,4 +1,3 @@
-import json
 import time
 import threading
 from dataclasses import dataclass
@@ -11,12 +10,11 @@ import mediapipe.python.solutions.hands as mp_hands
 import mediapipe.python.solutions.pose as mp_pose
 import numpy as np
 import streamlit as st
-import streamlit.components.v1 as components
 from streamlit_webrtc import VideoProcessorBase, WebRtcMode, webrtc_streamer
 
 
-mp_pose_connections = mp_pose.POSE_CONNECTIONS
-mp_hand_connections = mp_hands.HAND_CONNECTIONS
+POSE_CONNECTIONS = mp_pose.POSE_CONNECTIONS
+HAND_CONNECTIONS = mp_hands.HAND_CONNECTIONS
 
 
 @dataclass(frozen=True)
@@ -73,7 +71,6 @@ class RehabProcessor(VideoProcessorBase):
         self.counters = {"LEFT": 0, "RIGHT": 0}
         self.status = "按 START 後開始辨識。"
         self.last_value = "-"
-        self.speech_text = "歡迎使用 AI 教練。請先觀看示範影片，再按 START 開始。"
 
     def recv(self, frame):
         image = frame.to_ndarray(format="bgr24")
@@ -95,7 +92,7 @@ class RehabProcessor(VideoProcessorBase):
         if self._two_side_complete():
             if results.multi_hand_landmarks:
                 for landmarks in results.multi_hand_landmarks:
-                    mp_drawing.draw_landmarks(image, landmarks, mp_hand_connections)
+                    mp_drawing.draw_landmarks(image, landmarks, HAND_CONNECTIONS)
             return "訓練完成，已停止計次。"
 
         status = "未偵測到手掌，請讓手掌進入畫面。"
@@ -105,7 +102,7 @@ class RehabProcessor(VideoProcessorBase):
         for i, landmarks in enumerate(results.multi_hand_landmarks):
             raw_label = results.multi_handedness[i].classification[0].label.upper()
             label = "LEFT" if raw_label == "RIGHT" else "RIGHT"
-            mp_drawing.draw_landmarks(image, landmarks, mp_hand_connections)
+            mp_drawing.draw_landmarks(image, landmarks, HAND_CONNECTIONS)
 
             if label != self.current_target:
                 continue
@@ -125,32 +122,27 @@ class RehabProcessor(VideoProcessorBase):
             ):
                 self.stage = "open"
                 self.counters[self.current_target] += 1
-                count = self.counters[self.current_target]
-                status = f"{self._side_text()}手完成第 {count} 次。"
-                self._say(str(count))
+                status = f"{self._side_text()}手完成第 {self.counters[self.current_target]} 次。"
                 self._advance_side_if_needed()
 
         return status
 
     def _process_pose(self, image, rgb):
         results = self.pose.process(rgb)
-
         if not results.pose_landmarks:
             return "未偵測到姿勢，請讓上半身進入畫面。"
 
         lm = results.pose_landmarks.landmark
-        kind = self.config.kind
-
-        if kind == "elbow":
+        if self.config.kind == "elbow":
             status = self._process_elbow(lm)
-        elif kind == "shoulder_circles":
+        elif self.config.kind == "shoulder_circles":
             status = self._process_shoulder_circles(lm)
-        elif kind == "hand_raise":
+        elif self.config.kind == "hand_raise":
             status = self._process_hand_raise(lm)
         else:
             status = self._process_lateral_raise(lm)
 
-        mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose_connections)
+        mp_drawing.draw_landmarks(image, results.pose_landmarks, POSE_CONNECTIONS)
         return status
 
     def _process_elbow(self, lm):
@@ -188,9 +180,7 @@ class RehabProcessor(VideoProcessorBase):
         ):
             self.stage = "flex"
             self.counters[self.current_target] += 1
-            count = self.counters[self.current_target]
-            status = f"{self._side_text()}手完成第 {count} 次。"
-            self._say(str(count))
+            status = f"{self._side_text()}手完成第 {self.counters[self.current_target]} 次。"
             self._advance_side_if_needed()
 
         return status
@@ -213,11 +203,6 @@ class RehabProcessor(VideoProcessorBase):
         if rel_height < 0.39 and self.stage == "up":
             self.stage = "down"
             self.reps += 1
-            self._say(
-                f"{self.reps}，訓練完成，做得太棒了。"
-                if self.reps >= self.config.target_reps
-                else str(self.reps)
-            )
             return f"完成第 {self.reps} 次。"
 
         return f"肩部高度值：{rel_height:.2f}"
@@ -246,11 +231,6 @@ class RehabProcessor(VideoProcessorBase):
             self.stage = "down"
             self.reps += 1
             self.last_value = "down"
-            self._say(
-                f"{self.reps}，訓練完成，做得太棒了。"
-                if self.reps >= self.config.target_reps
-                else str(self.reps)
-            )
             return f"完成第 {self.reps} 次。"
 
         self.last_value = "down"
@@ -283,11 +263,6 @@ class RehabProcessor(VideoProcessorBase):
             self.stage = "down"
             self.reps += 1
             self.last_value = "down"
-            self._say(
-                f"{self.reps}，訓練完成，做得太棒了。"
-                if self.reps >= self.config.target_reps
-                else str(self.reps)
-            )
             return f"完成第 {self.reps} 次。"
 
         self.last_value = "down"
@@ -301,9 +276,6 @@ class RehabProcessor(VideoProcessorBase):
         ):
             self.current_target = "LEFT"
             self.stage = "wait"
-            self._say("右手完成，請換左手。")
-        elif self._two_side_complete():
-            self._say(f"{self.config.target_reps}，訓練完成，做得太棒了。")
 
     def _two_side_complete(self):
         return (
@@ -315,30 +287,8 @@ class RehabProcessor(VideoProcessorBase):
     def _side_text(self):
         return "左" if self.current_target == "LEFT" else "右"
 
-    def _say(self, text):
-        self.speech_text = text
 
-
-def browser_speak(text):
-    components.html(
-        f"""
-        <script>
-        const text = {json.dumps(text)};
-        const synth = window.parent.speechSynthesis || window.speechSynthesis;
-        if (synth && text) {{
-          synth.cancel();
-          const utterance = new SpeechSynthesisUtterance(text);
-          utterance.lang = "zh-TW";
-          utterance.rate = 1.05;
-          synth.speak(utterance);
-        }}
-        </script>
-        """,
-        height=0,
-    )
-
-
-def read_processor_state(ctx, config):
+def read_processor_state(ctx):
     if not ctx.video_processor:
         return {
             "status": "按 START 後開始辨識。",
@@ -346,7 +296,6 @@ def read_processor_state(ctx, config):
             "reps": 0,
             "counters": {"LEFT": 0, "RIGHT": 0},
             "current_target": "RIGHT",
-            "speech_text": None,
         }
 
     with ctx.video_processor.lock:
@@ -356,7 +305,6 @@ def read_processor_state(ctx, config):
             "reps": ctx.video_processor.reps,
             "counters": dict(ctx.video_processor.counters),
             "current_target": ctx.video_processor.current_target,
-            "speech_text": ctx.video_processor.speech_text,
         }
 
 
@@ -395,22 +343,10 @@ def run_app(config: ExerciseConfig):
 
     metrics_slot = st.empty()
     status_slot = st.empty()
-    speech_slot = st.empty()
-
-    state = read_processor_state(ctx, config)
+    state = read_processor_state(ctx)
     render_state(state, config, metrics_slot, status_slot)
 
-    if "last_spoken" not in st.session_state:
-        st.session_state.last_spoken = None
-
     while ctx.state.playing:
-        state = read_processor_state(ctx, config)
+        state = read_processor_state(ctx)
         render_state(state, config, metrics_slot, status_slot)
-
-        speech_text = state["speech_text"]
-        if speech_text and speech_text != st.session_state.last_spoken:
-            st.session_state.last_spoken = speech_text
-            with speech_slot:
-                browser_speak(speech_text)
-
-        time.sleep(0.4)
+        time.sleep(0.5)
