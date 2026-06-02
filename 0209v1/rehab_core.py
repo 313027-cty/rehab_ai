@@ -440,7 +440,7 @@ def render_muted_video(video_path):
           width: 100%;
           height: 100%;
           display: block;
-          object-fit: contain;
+          object-fit: cover;
           background: #000;
           border-radius: 8px;
         }}
@@ -461,7 +461,7 @@ def render_muted_video(video_path):
         }}
         </script>
         """,
-        height=320,
+        height=240,
     )
 
 
@@ -472,22 +472,61 @@ def install_camera_layout_fixes():
         function applyCameraLayoutFixes() {
           try {
             const doc = window.parent.document;
+            const isMobile = window.innerWidth <= 700;
+            const cameraHeight = isMobile ? 300 : 520;
             doc.querySelectorAll("iframe").forEach((frame) => {
               const title = (frame.getAttribute("title") || "").toLowerCase();
               const src = (frame.getAttribute("src") || "").toLowerCase();
               if (title.includes("streamlit-webrtc") || src.includes("streamlit-webrtc")) {
                 frame.style.width = "100%";
                 frame.style.maxWidth = "100%";
+                frame.style.height = (cameraHeight + 110) + "px";
+                frame.style.minHeight = (cameraHeight + 110) + "px";
                 frame.style.marginTop = "0";
                 frame.style.marginBottom = "0";
+                try {
+                  const innerDoc = frame.contentDocument || frame.contentWindow.document;
+                  if (innerDoc && !innerDoc.getElementById("rehab-camera-style")) {
+                    const style = innerDoc.createElement("style");
+                    style.id = "rehab-camera-style";
+                    style.textContent = `
+                      html, body {
+                        margin: 0 !important;
+                        padding: 0 !important;
+                        overflow: hidden !important;
+                      }
+                      video {
+                        width: 100% !important;
+                        max-width: 100% !important;
+                        height: ${cameraHeight}px !important;
+                        min-height: ${cameraHeight}px !important;
+                        object-fit: cover !important;
+                        transform: scaleX(1) !important;
+                        background: #000 !important;
+                      }
+                      button {
+                        margin-top: 0.5rem !important;
+                      }
+                    `;
+                    innerDoc.head.appendChild(style);
+                  }
+                  innerDoc.querySelectorAll("video").forEach((video) => {
+                    video.style.width = "100%";
+                    video.style.maxWidth = "100%";
+                    video.style.height = cameraHeight + "px";
+                    video.style.minHeight = cameraHeight + "px";
+                    video.style.objectFit = "cover";
+                    video.style.transform = "scaleX(1)";
+                    video.style.background = "#000";
+                  });
+                } catch (e) {}
               }
             });
             doc.querySelectorAll("video").forEach((video) => {
               video.style.width = "100%";
               video.style.maxWidth = "100%";
-              video.style.height = "320px";
-              video.style.objectFit = "contain";
-              video.style.background = "#000";
+              video.style.objectFit = "cover";
+              video.style.transform = "scaleX(1)";
             });
           } catch (e) {}
         }
@@ -564,8 +603,8 @@ def run_app(config: ExerciseConfig):
             style={
                 "width": "100%",
                 "maxWidth": "100%",
-                "height": "320px",
-                "objectFit": "contain",
+                "height": "520px",
+                "objectFit": "cover",
                 "transform": "scaleX(1)",
                 "background": "#000",
             },
