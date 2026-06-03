@@ -439,12 +439,12 @@ def run_app(config: ExerciseConfig):
     if not video_path.exists():
         video_path = Path(__file__).parent / Path(config.demo_video).name
 
-    if video_path.exists():
-        render_muted_video(video_path)
-    else:
-        st.warning("找不到示範影片，請確認 media 資料夾已上傳。")
+   install_speech_reader()
 
-    install_speech_reader()
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    st.subheader("AI 姿勢辨識")
 
     ctx = webrtc_streamer(
         key=config.kind,
@@ -453,6 +453,14 @@ def run_app(config: ExerciseConfig):
         media_stream_constraints={"video": True, "audio": False},
         async_processing=True,
     )
+
+with col2:
+    st.subheader("示範影片")
+
+    if video_path.exists():
+        render_muted_video(video_path)
+    else:
+        st.warning("找不到示範影片")
 
     metrics_slot = st.empty()
     status_slot = st.empty()
