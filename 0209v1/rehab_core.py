@@ -91,8 +91,6 @@ class RehabProcessor(VideoProcessorBase):
         with self.lock:
             self.status = status
 
-        # streamlit-webrtc mirrors the displayed video element in some browsers.
-        # Return a pre-flipped frame so the final on-screen image is not mirrored.
         return av.VideoFrame.from_ndarray(cv2.flip(image, 1), format="bgr24")
 
     def _process_hand_open(self, image, rgb):
@@ -180,6 +178,7 @@ class RehabProcessor(VideoProcessorBase):
             [lm[elbow].x, lm[elbow].y],
             [lm[wrist].x, lm[wrist].y],
         )
+
         self.last_value = f"{angle:.0f} 度"
         status = f"{self._side_text()}手肘角度：{angle:.0f} 度"
 
@@ -211,6 +210,7 @@ class RehabProcessor(VideoProcessorBase):
         sh_r = lm[mp_pose.PoseLandmark.RIGHT_SHOULDER]
         hip_l = lm[mp_pose.PoseLandmark.LEFT_HIP]
         hip_r = lm[mp_pose.PoseLandmark.RIGHT_HIP]
+
         rel_height = ((hip_l.y + hip_r.y) / 2) - ((sh_l.y + sh_r.y) / 2)
         self.last_value = f"{rel_height:.2f}"
 
@@ -235,6 +235,7 @@ class RehabProcessor(VideoProcessorBase):
         r_wrist = lm[mp_pose.PoseLandmark.RIGHT_WRIST]
         l_shoulder = lm[mp_pose.PoseLandmark.LEFT_SHOULDER]
         r_shoulder = lm[mp_pose.PoseLandmark.RIGHT_SHOULDER]
+
         is_raised = (
             l_wrist.visibility > 0.5 and l_wrist.y < l_shoulder.y - 0.05
         ) or (
@@ -269,13 +270,21 @@ class RehabProcessor(VideoProcessorBase):
         r_shoulder = lm[mp_pose.PoseLandmark.RIGHT_SHOULDER]
 
         points_visible = all(
-            point.visibility > 0.7 for point in [l_elbow, r_elbow, l_shoulder, r_shoulder]
+            point.visibility > 0.7
+            for point in [l_elbow, r_elbow, l_shoulder, r_shoulder]
         )
+
         if not points_visible:
             return "肩膀或手肘不清楚，請調整鏡頭。"
 
-        elbows_up = l_elbow.y < l_shoulder.y + 0.12 and r_elbow.y < r_shoulder.y + 0.12
-        elbows_down = l_elbow.y > l_shoulder.y + 0.25 and r_elbow.y > r_shoulder.y + 0.25
+        elbows_up = (
+            l_elbow.y < l_shoulder.y + 0.12
+            and r_elbow.y < r_shoulder.y + 0.12
+        )
+        elbows_down = (
+            l_elbow.y > l_shoulder.y + 0.25
+            and r_elbow.y > r_shoulder.y + 0.25
+        )
 
         if elbows_up:
             self.stage = "up"
@@ -333,6 +342,7 @@ class RehabProcessor(VideoProcessorBase):
     def _say_error(self):
         if not self.has_started_moving:
             return
+
         now = time.monotonic()
         if now - self.last_error_spoken_at >= 3.0:
             self.last_error_spoken_at = now
@@ -387,10 +397,12 @@ def render_muted_video(video_path):
         </video>
         <script>
         const video = document.getElementById("demo-video");
+
         if (video) {{
           video.muted = true;
           video.defaultMuted = true;
           video.volume = 0;
+
           video.onvolumechange = () => {{
             video.muted = true;
             video.volume = 0;
@@ -407,23 +419,30 @@ def install_speech_reader():
         """
         <script>
         const spoken = new Set();
+
         function readSpeechText() {
           try {
             const doc = window.parent.document;
             const node = doc.getElementById("rehab-speech-text");
             const text = node ? node.textContent.trim() : "";
             const speechId = node ? node.getAttribute("data-speech-id") : "";
+
             if (!text || !speechId || spoken.has(speechId)) return;
+
             spoken.add(speechId);
+
             const synth = window.parent.speechSynthesis || window.speechSynthesis;
             if (!synth) return;
+
             synth.cancel();
+
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.lang = "zh-TW";
             utterance.rate = 1.35;
             synth.speak(utterance);
           } catch (e) {}
         }
+
         setInterval(readSpeechText, 700);
         </script>
         """,
@@ -432,41 +451,44 @@ def install_speech_reader():
 
 
 def run_app(config: ExerciseConfig):
-    st.set_page_config(page_title=config.action_name, layout="centered")
+    st.set_page_config(page_title=config.action_name, layout="wide")
     st.title(config.action_name)
 
     video_path = Path(__file__).parent / config.demo_video
+
     if not video_path.exists():
         video_path = Path(__file__).parent / Path(config.demo_video).name
 
-   install_speech_reader()
+    install_speech_reader()
 
-col1, col2 = st.columns([2, 1])
+    col1, col2 = st.columns([2, 1])
 
-with col1:
-    st.subheader("AI 姿勢辨識")
+    with col1:
+        st.subheader("AI 姿勢辨識")
 
-    ctx = webrtc_streamer(
-        key=config.kind,
-        mode=WebRtcMode.SENDRECV,
-        video_processor_factory=lambda: RehabProcessor(config),
-        media_stream_constraints={"video": True, "audio": False},
-        async_processing=True,
-    )
+        ctx = webrtc_streamer(
+            key=config.kind,
+            mode=WebRtcMode.SENDRECV,
+            video_processor_factory=lambda: RehabProcessor(config),
+            media_stream_constraints={"video": True, "audio": False},
+            async_processing=True,
+        )
 
-with col2:
-    st.subheader("示範影片")
+    with col2:
+        st.subheader("示範影片")
 
-    if video_path.exists():
-        render_muted_video(video_path)
-    else:
-        st.warning("找不到示範影片")
+        if video_path.exists():
+            render_muted_video(video_path)
+        else:
+            st.warning("找不到示範影片")
 
     metrics_slot = st.empty()
     status_slot = st.empty()
     speech_slot = st.empty()
+
     state = read_processor_state(ctx)
     render_state(state, config, metrics_slot, status_slot)
+
     speech_slot.markdown(
         '<span id="rehab-speech-text" style="display:none;">準備開始復健訓練。</span>',
         unsafe_allow_html=True,
@@ -475,10 +497,13 @@ with col2:
     while ctx.state.playing:
         state = read_processor_state(ctx)
         render_state(state, config, metrics_slot, status_slot)
+
         speech_text = state.get("speech_text") or ""
         speech_id = state.get("speech_id", 0)
+
         speech_slot.markdown(
             f'<span id="rehab-speech-text" data-speech-id="{speech_id}" style="display:none;">{html.escape(speech_text)}</span>',
             unsafe_allow_html=True,
         )
+
         time.sleep(0.5)
