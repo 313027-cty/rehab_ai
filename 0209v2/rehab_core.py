@@ -77,7 +77,6 @@ class RehabProcessor(VideoProcessorBase):
         self.speech_text = "準備開始復健訓練。"
         self.speech_id = 1
         self.last_error_spoken_at = 0.0
-        self.has_started_moving = False
 
     def recv(self, frame):
         image = frame.to_ndarray(format="bgr24")
@@ -122,7 +121,6 @@ class RehabProcessor(VideoProcessorBase):
 
             if extension < 0.25:
                 self.stage = "close"
-                self.has_started_moving = True
                 status = f"{self._side_text()}手握拳後再張開。"
             elif self.stage == "wait":
                 self._say_error()
@@ -185,7 +183,6 @@ class RehabProcessor(VideoProcessorBase):
 
         if angle > 160:
             self.stage = "stretch"
-            self.has_started_moving = True
             status = f"{self._side_text()}手伸直，再慢慢彎曲。"
         elif self.stage == "wait":
             self._say_error()
@@ -216,7 +213,6 @@ class RehabProcessor(VideoProcessorBase):
 
         if rel_height > 0.41:
             self.stage = "up"
-            self.has_started_moving = True
             return "偵測到上提，請放回。"
 
         if rel_height < 0.39 and self.stage == "up":
@@ -243,7 +239,6 @@ class RehabProcessor(VideoProcessorBase):
 
         if is_raised:
             self.stage = "up"
-            self.has_started_moving = True
             self.last_value = "up"
             return "手已舉起，請放下完成一次。"
 
@@ -279,7 +274,6 @@ class RehabProcessor(VideoProcessorBase):
 
         if elbows_up:
             self.stage = "up"
-            self.has_started_moving = True
             self.last_value = "up"
             return "雙手已側舉，請放下完成一次。"
 
@@ -331,8 +325,6 @@ class RehabProcessor(VideoProcessorBase):
         self.speech_id += 1
 
     def _say_error(self):
-        if not self.has_started_moving:
-            return
         now = time.monotonic()
         if now - self.last_error_spoken_at >= 3.0:
             self.last_error_spoken_at = now
@@ -439,12 +431,12 @@ def run_app(config: ExerciseConfig):
     if not video_path.exists():
         video_path = Path(__file__).parent / Path(config.demo_video).name
 
+    if video_path.exists():
+        render_muted_video(video_path)
+    else:
+        st.warning("找不到示範影片，請確認 media 資料夾已上傳。")
+
     install_speech_reader()
-
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    st.subheader("AI 姿勢辨識")
 
     ctx = webrtc_streamer(
         key=config.kind,
@@ -453,14 +445,6 @@ with col1:
         media_stream_constraints={"video": True, "audio": False},
         async_processing=True,
     )
-
-with col2:
-    st.subheader("示範影片")
-
-    if video_path.exists():
-        render_muted_video(video_path)
-    else:
-        st.warning("找不到示範影片")
 
     metrics_slot = st.empty()
     status_slot = st.empty()
