@@ -466,9 +466,23 @@ def run_app(config: ExerciseConfig):
     )
     st.divider()
 
-    st.link_button(
-        "完成運動，返回平台",
-        "https://super-evolution-lab.web.app/?rehabDone=1"
+    st.markdown(
+    """
+    <a href="https://super-evolution-lab.web.app/?rehabDone=1" target="_self">
+        <button style="
+            font-size: 22px;
+            padding: 12px 24px;
+            border-radius: 12px;
+            border: none;
+            background-color: #6A5ACD;
+            color: white;
+            cursor: pointer;
+        ">
+            完成運動，返回平台
+        </button>
+    </a>
+    """,
+    unsafe_allow_html=True
     )
     while ctx.state.playing:
         state = read_processor_state(ctx)
