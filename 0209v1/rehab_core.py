@@ -424,8 +424,12 @@ def install_speech_reader():
 
 
 def run_app(config: ExerciseConfig):
-    st.set_page_config(page_title=config.action_name, layout="centered")
-    st.title(config.action_name)
+       st.divider()
+
+    st.link_button(
+        "完成運動，返回平台",
+        "https://super-evolution-lab.web.app/?rehabDone=1"
+    )
 
     video_path = Path(__file__).parent / config.demo_video
     if not video_path.exists():
