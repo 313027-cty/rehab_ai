@@ -1,3 +1,5 @@
+import base64
+import html
 import time
 import threading
 from dataclasses import dataclass
@@ -10,6 +12,7 @@ import mediapipe.python.solutions.hands as mp_hands
 import mediapipe.python.solutions.pose as mp_pose
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 from streamlit_webrtc import VideoProcessorBase, WebRtcMode, webrtc_streamer
 
 
@@ -84,7 +87,8 @@ class RehabProcessor(VideoProcessorBase):
         with self.lock:
             self.status = status
 
-        return av.VideoFrame.from_ndarray(image, format="bgr24")
+        display_image = cv2.flip(image, 1)
+        return av.VideoFrame.from_ndarray(display_image, format="bgr24")
 
     def _process_hand_open(self, image, rgb):
         results = self.hands.process(rgb)
@@ -323,15 +327,60 @@ def render_state(state, config, metrics_slot, status_slot):
     status_slot.info(state["status"])
 
 
+def render_muted_video(video_path):
+    encoded = base64.b64encode(video_path.read_bytes()).decode("ascii")
+    components.html(
+        f"""
+        <video controls muted playsinline style="width:100%; border-radius:8px;">
+          <source src="data:video/mp4;base64,{encoded}" type="video/mp4">
+        </video>
+        """,
+        height=420,
+    )
+
+
+def install_speech_reader():
+    components.html(
+        """
+        <script>
+        const spoken = new Set();
+        function readSpeechText() {
+          try {
+            const doc = window.parent.document;
+            const node = doc.getElementById("rehab-speech-text");
+            const text = node ? node.textContent.trim() : "";
+            if (!text || spoken.has(text)) return;
+            spoken.add(text);
+            const synth = window.parent.speechSynthesis || window.speechSynthesis;
+            if (!synth) return;
+            synth.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = "zh-TW";
+            utterance.rate = 1.05;
+            synth.speak(utterance);
+          } catch (e) {}
+        }
+        setInterval(readSpeechText, 700);
+        </script>
+        """,
+        height=0,
+    )
+
+
 def run_app(config: ExerciseConfig):
     st.set_page_config(page_title=config.action_name, layout="centered")
     st.title(config.action_name)
 
     video_path = Path(__file__).parent / config.demo_video
+    if not video_path.exists():
+        video_path = Path(__file__).parent / Path(config.demo_video).name
+
     if video_path.exists():
-        st.video(video_path.read_bytes(), format="video/mp4")
+        render_muted_video(video_path)
     else:
         st.warning("找不到示範影片，請確認 media 資料夾已上傳。")
+
+    install_speech_reader()
 
     ctx = webrtc_streamer(
         key=config.kind,
@@ -343,10 +392,19 @@ def run_app(config: ExerciseConfig):
 
     metrics_slot = st.empty()
     status_slot = st.empty()
+    speech_slot = st.empty()
     state = read_processor_state(ctx)
     render_state(state, config, metrics_slot, status_slot)
+    speech_slot.markdown(
+        '<span id="rehab-speech-text" style="display:none;">按 START 後開始辨識。</span>',
+        unsafe_allow_html=True,
+    )
 
     while ctx.state.playing:
         state = read_processor_state(ctx)
         render_state(state, config, metrics_slot, status_slot)
+        speech_slot.markdown(
+            f'<span id="rehab-speech-text" style="display:none;">{html.escape(state["status"])}</span>',
+            unsafe_allow_html=True,
+        )
         time.sleep(0.5)
