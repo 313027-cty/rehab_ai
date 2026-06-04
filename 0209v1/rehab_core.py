@@ -462,8 +462,14 @@ def run_app(config: ExerciseConfig):
     speech_slot.markdown(
         '<span id="rehab-speech-text" style="display:none;">準備開始復健訓練。</span>',
         unsafe_allow_html=True,
+   
     )
+    st.divider()
 
+    st.link_button(
+        "完成運動，返回平台",
+        "https://super-evolution-lab.web.app/?rehabDone=1"
+    )
     while ctx.state.playing:
         state = read_processor_state(ctx)
         render_state(state, config, metrics_slot, status_slot)
@@ -474,10 +480,3 @@ def run_app(config: ExerciseConfig):
             unsafe_allow_html=True,
         )
         time.sleep(0.5)
-
-st.divider()
-
-st.link_button(
-    "完成運動，返回平台",
-    "https://super-evolution-lab.web.app/?rehabDone=1"
-)
