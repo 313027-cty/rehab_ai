@@ -632,3 +632,9 @@ def run_app(config: ExerciseConfig):
             unsafe_allow_html=True,
         )
         time.sleep(0.5)
+st.divider()
+
+st.link_button(
+    "完成運動，返回平台",
+    "https://super-evolution-lab.web.app/?rehabDone=1"
+)
